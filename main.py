@@ -229,31 +229,76 @@ def main():
             #)
             d_unit="inch"
 
-        distances_str = st.text_input(
-            "Abstände für Geräuschimmission [m] (durch Komma trennen)",
-            value="80, 85, 100",
-            help="Beispieleingabe: 80, 85, 100"
+        calculation_mode = st.radio(
+            "Berechnungsmodus",
+            options=["distance", "sound_level"],
+            format_func=lambda x: "Entfernung → Schalldruckpegel" if x == "distance" else "Schalldruckpegel → Entfernung",
+            help="Wählen Sie, ob Sie Entfernungen oder Zielpegel eingeben möchten"
         )
+
+        if calculation_mode == "distance":
+            distances_str = st.text_input(
+                "Abstände für Geräuschimmission [m] (durch Komma trennen)",
+                value="80, 85, 100",
+                help="Beispieleingabe: 80, 85, 100"
+            )
+        else:
+            sound_levels_str = st.text_input(
+                "Ziel-Schalldruckpegel [dB] (durch Komma trennen)",
+                value="60, 55, 50",
+                help="Beispieleingabe: 60, 55, 50"
+            )
 
         submitted = st.form_submit_button("Berechnen und Bericht erstellen")
 
     if submitted:
         try:
-            # Abstände parsen
-            raw_parts = [p.strip() for p in distances_str.replace(";", ",").split(",") if p.strip() != ""]
-            distances = [float(p.replace(",", ".")) for p in raw_parts]
-            distances = [d for d in distances if d > 0]
-
-            if not distances:
-                st.error("Bitte geben Sie mindestens einen positiven Abstand in Metern an.")
-                return
-
             # Geometrie & Druck aufbereiten
             area = diameter_to_area(diameter, d_unit)
             p_abs = pressure_to_absolute(p_value, p_kind)
 
-            # Physikalische Berechnung
-            results = compute_flows_and_acoustics(p_abs, area, distances)
+            if calculation_mode == "distance":
+                # Abstände parsen
+                raw_parts = [p.strip() for p in distances_str.replace(";", ",").split(",") if p.strip() != ""]
+                distances = [float(p.replace(",", ".")) for p in raw_parts]
+                distances = [d for d in distances if d > 0]
+
+                if not distances:
+                    st.error("Bitte geben Sie mindestens einen positiven Abstand in Metern an.")
+                    return
+
+                # Physikalische Berechnung
+                results = compute_flows_and_acoustics(p_abs, area, distances)
+            else:
+                # Schallpegel parsen
+                raw_parts = [p.strip() for p in sound_levels_str.replace(";", ",").split(",") if p.strip() != ""]
+                sound_levels = [float(p.replace(",", ".")) for p in raw_parts]
+                
+                if not sound_levels:
+                    st.error("Bitte geben Sie mindestens einen Schalldruckpegel in dB an.")
+                    return
+
+                # Erst L_W berechnen (ohne Abstände)
+                temp_results = compute_flows_and_acoustics(p_abs, area, [1.0])
+                L_W = temp_results["L_W"]
+                
+                # Entfernungen aus Zielpegeln berechnen
+                # L_p = L_W - 10*log10(2*pi*r^2)
+                # => r = sqrt(10^((L_W - L_p)/10) / (2*pi))
+                distances = []
+                for L_p_target in sound_levels:
+                    if L_p_target >= L_W:
+                        st.warning(f"Zielpegel {L_p_target} dB ist höher als Schallleistungspegel {L_W:.1f} dB - nicht erreichbar!")
+                        continue
+                    r = sqrt(10**((L_W - L_p_target)/10) / (2*pi))
+                    distances.append(r)
+                
+                if not distances:
+                    st.error("Keine gültigen Entfernungen berechnet.")
+                    return
+                
+                # Vollständige Berechnung mit berechneten Abständen
+                results = compute_flows_and_acoustics(p_abs, area, distances)
 
             # Kurze tabellarische Übersicht
             st.subheader("Berechnung – Übersicht")
